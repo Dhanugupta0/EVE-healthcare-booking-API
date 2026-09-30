@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 from httpx import AsyncClient
 
@@ -21,7 +23,7 @@ async def _setup_pending_booking(client: AsyncClient, auth_header: dict) -> int:
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -51,8 +53,8 @@ async def test_simulate_payment(client: AsyncClient, auth_header: dict):
 
 
 @pytest.mark.asyncio
-async def test_payment_non_pending_booking(client: AsyncClient, auth_header: dict):
-    """Paying for a non-PENDING booking → 400."""
+async def test_payment_cancelled_booking(client: AsyncClient, auth_header: dict):
+    """Paying for a CANCELLED booking → 400."""
     booking_id = await _setup_pending_booking(client, auth_header)
 
     # Cancel it first
@@ -64,6 +66,55 @@ async def test_payment_non_pending_booking(client: AsyncClient, auth_header: dic
         headers=auth_header,
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_payment_confirmed_booking(client: AsyncClient, auth_header: dict):
+    """Paying for an already CONFIRMED booking → 400."""
+    booking_id = await _setup_pending_booking(client, auth_header)
+
+    # Force a SUCCESS payment via webhook
+    await client.post(
+        "/payments/webhook/",
+        json={"event_id": "evt-confirm", "booking_id": booking_id, "status": "SUCCESS"},
+    )
+
+    resp = await client.post(
+        "/payments/",
+        json={"booking_id": booking_id},
+        headers=auth_header,
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_payment_retry_after_failure(client: AsyncClient, auth_header: dict):
+    """Payment retry on a FAILED booking is allowed and can succeed."""
+    booking_id = await _setup_pending_booking(client, auth_header)
+
+    # Force a FAILED payment via webhook
+    await client.post(
+        "/payments/webhook/",
+        json={"event_id": "evt-fail-001", "booking_id": booking_id, "status": "FAILED"},
+    )
+
+    # Verify booking is FAILED
+    resp = await client.get(f"/bookings/{booking_id}", headers=auth_header)
+    assert resp.json()["status"] == "FAILED"
+
+    # Retry payment — mock to always succeed
+    with patch("app.services.payment_service.random.choices", return_value=["SUCCESS"]):
+        resp = await client.post(
+            "/payments/",
+            json={"booking_id": booking_id},
+            headers=auth_header,
+        )
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "SUCCESS"
+
+    # Booking should now be CONFIRMED
+    resp = await client.get(f"/bookings/{booking_id}", headers=auth_header)
+    assert resp.json()["status"] == "CONFIRMED"
 
 
 @pytest.mark.asyncio
@@ -128,3 +179,27 @@ async def test_webhook_nonexistent_booking(client: AsyncClient):
         },
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_webhook_cancelled_booking_not_revived(client: AsyncClient, auth_header: dict):
+    """Webhook SUCCESS on a cancelled booking must not change booking status."""
+    booking_id = await _setup_pending_booking(client, auth_header)
+
+    # Cancel the booking
+    await client.post(f"/bookings/{booking_id}/cancel", headers=auth_header)
+
+    # Webhook arrives after cancellation
+    resp = await client.post(
+        "/payments/webhook/",
+        json={
+            "event_id": "evt-late-webhook",
+            "booking_id": booking_id,
+            "status": "SUCCESS",
+        },
+    )
+    assert resp.status_code == 200
+
+    # Booking must still be CANCELLED
+    resp = await client.get(f"/bookings/{booking_id}", headers=auth_header)
+    assert resp.json()["status"] == "CANCELLED"

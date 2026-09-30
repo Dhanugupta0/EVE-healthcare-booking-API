@@ -14,10 +14,10 @@ async def simulate_payment(db: AsyncSession, booking_id: int, user_id: int) -> P
     if not booking or booking.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
-    if booking.status != BookingStatus.PENDING.value:
+    if booking.status not in (BookingStatus.PENDING.value, BookingStatus.FAILED.value):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Payment is only allowed for PENDING bookings",
+            detail="Payment is only allowed for PENDING or FAILED bookings",
         )
 
     # Simulate payment outcome — weighted toward success
@@ -65,7 +65,7 @@ async def process_webhook(db: AsyncSession, event_id: str, booking_id: int, paym
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payment status"
         )
 
-    # Create payment and update booking in the same transaction
+    # Create payment record regardless of booking state (audit trail)
     payment = Payment(
         booking_id=booking_id,
         event_id=event_id,
@@ -73,12 +73,15 @@ async def process_webhook(db: AsyncSession, event_id: str, booking_id: int, paym
     )
     db.add(payment)
 
-    if payment_status == PaymentStatus.SUCCESS.value:
-        booking.status = BookingStatus.CONFIRMED.value
-    else:
-        booking.status = BookingStatus.FAILED.value
+    # Do not revive a cancelled booking
+    if booking.status != BookingStatus.CANCELLED.value:
+        if payment_status == PaymentStatus.SUCCESS.value:
+            booking.status = BookingStatus.CONFIRMED.value
+        else:
+            booking.status = BookingStatus.FAILED.value
 
     # Single commit covering both writes
     await db.commit()
     await db.refresh(payment)
     return payment
+

@@ -57,14 +57,14 @@ Tests use an in-memory SQLite database — no Postgres needed.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| POST | `/auth/signup` | none | Create user |
+| POST | `/auth/signup` | none | Create user (admin if email matches `ADMIN_EMAIL`) |
 | POST | `/auth/login` | none | Returns JWT access token |
-| GET | `/centres/` | none | List centres |
+| GET | `/centres/` | none | List centres (paginated: `skip`, `limit`) |
 | GET | `/centres/{centre_id}` | none | Centre detail + its tests |
-| POST | `/centres/` | required | Create a centre |
-| POST | `/centres/{centre_id}/tests` | required | Add a test to a centre |
+| POST | `/centres/` | admin | Create a centre |
+| POST | `/centres/{centre_id}/tests` | admin | Add a test to a centre |
 | POST | `/bookings/` | required | Create a booking (PENDING, amount = test price) |
-| GET | `/bookings/` | required | List current user's bookings |
+| GET | `/bookings/` | required | List current user's bookings (paginated: `skip`, `limit`) |
 | GET | `/bookings/{id}` | required | Get one booking (must belong to caller) |
 | POST | `/bookings/{id}/cancel` | required | Cancel a PENDING or CONFIRMED booking |
 | POST | `/payments/` | required | Simulate payment → SUCCESS/FAILED |
@@ -76,18 +76,18 @@ Tests use an in-memory SQLite database — no Postgres needed.
 ```bash
 curl -X POST http://localhost:8000/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "securepass"}'
+  -d '{"email": "user@example.com", "password": "securepass123"}'
 ```
 
 **Login:**
 ```bash
 curl -X POST http://localhost:8000/auth/login \
-  -d "username=user@example.com&password=securepass"
+  -d "username=user@example.com&password=securepass123"
 ```
 
-**List Centres:**
+**List Centres (with pagination):**
 ```bash
-curl http://localhost:8000/centres/
+curl "http://localhost:8000/centres/?skip=0&limit=20"
 ```
 
 **Get Centre Detail:**
@@ -95,7 +95,7 @@ curl http://localhost:8000/centres/
 curl http://localhost:8000/centres/1
 ```
 
-**Create Centre (auth required):**
+**Create Centre (admin auth required):**
 ```bash
 curl -X POST http://localhost:8000/centres/ \
   -H "Authorization: Bearer <token>" \
@@ -103,7 +103,7 @@ curl -X POST http://localhost:8000/centres/ \
   -d '{"name": "City Diagnostics", "location": "Mumbai"}'
 ```
 
-**Add Test to Centre (auth required):**
+**Add Test to Centre (admin auth required):**
 ```bash
 curl -X POST http://localhost:8000/centres/1/tests \
   -H "Authorization: Bearer <token>" \
@@ -119,9 +119,9 @@ curl -X POST http://localhost:8000/bookings/ \
   -d '{"test_id": 1, "centre_id": 1, "appointment_time": "2025-06-15T10:00:00Z"}'
 ```
 
-**List My Bookings (auth required):**
+**List My Bookings (with pagination):**
 ```bash
-curl http://localhost:8000/bookings/ \
+curl "http://localhost:8000/bookings/?skip=0&limit=20" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -163,8 +163,8 @@ The data model follows the natural domain: **Users** book **Tests** at **Centres
 ### Tables
 
 | Table | Purpose |
-|-------|---------|
-| `users` | Authentication. Email is unique and indexed for fast lookup. |
+|-------|------------|
+| `users` | Authentication. Email is unique and indexed for fast lookup. `is_admin` flag controls access to management endpoints. |
 | `centres` | Diagnostic centres with name and location. |
 | `tests` | Diagnostic tests offered at a centre. FK to `centres`. Price stored here — booking amount is pulled from this, not from client input. |
 | `bookings` | A user's appointment for a test at a centre. Tracks status through its lifecycle. |
@@ -180,9 +180,42 @@ Payment providers often retry webhook calls. The `event_id` column has a unique 
 
 ---
 
+## Business Rules & Edge Cases
+
+### Input Validation (Pydantic)
+- **Password**: minimum 8 characters (422 if shorter)
+- **Centre name / test name**: cannot be empty (422 if blank)
+- **Test price**: must be greater than 0 (422 if zero or negative)
+- **Appointment time**: must be in the future (422 if in the past)
+
+### Admin Access Control
+- `is_admin` boolean on the User model (default `False`)
+- Set `ADMIN_EMAIL` env var — any user signing up with that email is automatically marked as admin
+- Only admins can create diagnostic centres (`POST /centres/`) and add tests (`POST /centres/{id}/tests`) — non-admins get 403
+
+### Webhook Cannot Revive Cancelled Bookings
+- If a booking has been cancelled by the user, a late-arriving webhook (SUCCESS or FAILED) will **not** change the booking status back
+- The payment record is still stored for audit trail, and idempotency still works correctly
+
+### Payment Retry After Failure
+- Payment is allowed for bookings in `PENDING` or `FAILED` status
+- Payment is blocked for `CONFIRMED` (already paid) and `CANCELLED` (user cancelled) bookings
+- Each retry generates a new `event_id`
+
+### Pagination
+- `GET /centres/` and `GET /bookings/` accept `skip` (default 0) and `limit` (default 20, max 100) query params
+- Example: `GET /bookings/?skip=0&limit=10`
+
+### Other Edge Cases
+- Ownership check returns 404, not 403 — avoids leaking information about whether a booking exists
+- Booking amount is pulled from the test's price in the database, not from client input
+- Cancelling an already cancelled or failed booking returns 400
+
+---
+
 ## Assumptions
 
-1. **No admin role** — any authenticated user can create centres and tests. In a real system, these would be admin-only operations.
+1. **Admin via env var** — `ADMIN_EMAIL` marks a single user as admin on signup. In production, this would be a proper RBAC system with an admin panel.
 2. **Ownership check returns 404, not 403** — when a user tries to access another user's booking, the API returns 404 to avoid leaking information about whether the booking exists.
 3. **Payment success rate is simulated** — the `POST /payments/` endpoint randomly resolves to SUCCESS (80%) or FAILED (20%). In production, this would integrate with a real payment gateway.
 4. **No Alembic migrations** — tables are created via `Base.metadata.create_all` on startup. Fine for a demo; production would use Alembic.
@@ -191,15 +224,14 @@ Payment providers often retry webhook calls. The `event_id` column has a unique 
 
 ---
 
-## What I'd Improve With More Time
+## What I Would Improve With More Time
 
 - **Alembic migrations** — proper schema versioning instead of `create_all` on startup
-- **Admin roles / RBAC** — only admins should create centres/tests; users should only book
-- **Rate limiting** — protect auth endpoints from brute force (e.g., via Redis + slowapi)
-- **Webhook signature verification** — validate that webhook calls come from the actual payment provider
-- **Retry queue** — for failed payments, allow retrying with exponential backoff
-- **Pagination** — for list endpoints (`/centres/`, `/bookings/`) to handle large datasets
-- **Logging & observability** — structured logging, request tracing, health check with DB ping
+- **Redis caching** — cache frequently accessed data like the centres list to reduce DB load
+- **Rate limiting on login** — protect `/auth/login` from brute force attacks (e.g., via Redis + slowapi)
+- **Structured logging** — add middleware for request/response logging with correlation IDs, latency tracking
+- **Webhook signature verification** — validate that webhook calls come from the actual payment provider using HMAC signatures
+- **Full RBAC** — role-based access control beyond a single admin flag
+- **Retry queue** — for failed payments, allow retrying with exponential backoff via Celery
 - **CI/CD pipeline** — automated test runs, linting, and deployment
-- **Input validation** — more granular validation (e.g., appointment_time must be in the future)
 - **Soft deletes** — instead of hard state transitions, maintain an audit trail

@@ -33,10 +33,12 @@ async def create_booking_route(
 
 @router.get("/", response_model=list[BookingResponse])
 async def list_bookings(
+    skip: int = 0,
+    limit: int = 20,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await get_user_bookings(db, current_user.id)
+    return await get_user_bookings(db, current_user.id, skip=skip, limit=min(limit, 100))
 
 
 @router.get("/{booking_id}", response_model=BookingResponse)

@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import require_admin
 from app.models.centre import Centre, Test
 from app.models.user import User
 from app.schemas.centre import (
@@ -18,8 +18,12 @@ router = APIRouter(prefix="/centres", tags=["centres"])
 
 
 @router.get("/", response_model=list[CentreResponse])
-async def list_centres(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Centre))
+async def list_centres(
+    skip: int = 0,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Centre).offset(skip).limit(min(limit, 100)))
     return list(result.scalars().all())
 
 
@@ -35,7 +39,7 @@ async def get_centre(centre_id: int, db: AsyncSession = Depends(get_db)):
 async def create_centre(
     payload: CentreCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     centre = Centre(name=payload.name, location=payload.location)
     db.add(centre)
@@ -49,7 +53,7 @@ async def add_test(
     centre_id: int,
     payload: TestCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     centre = await db.get(Centre, centre_id)
     if not centre:
@@ -60,3 +64,4 @@ async def add_test(
     await db.commit()
     await db.refresh(test)
     return test
+

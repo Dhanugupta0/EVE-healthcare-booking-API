@@ -1,10 +1,14 @@
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+# Set ADMIN_EMAIL before importing app so the test user can be admin
+os.environ["ADMIN_EMAIL"] = "test@example.com"
 
 from app.core.database import Base, get_db
 from app.main import app
@@ -51,7 +55,7 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
 
 @pytest_asyncio.fixture
 async def auth_header(client: AsyncClient) -> dict[str, str]:
-    """Sign up + log in a user, return the Authorization header."""
+    """Sign up + log in an admin user, return the Authorization header."""
     await client.post(
         "/auth/signup",
         json={"email": "test@example.com", "password": "testpass123"},
@@ -62,3 +66,19 @@ async def auth_header(client: AsyncClient) -> dict[str, str]:
     )
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def regular_auth_header(client: AsyncClient) -> dict[str, str]:
+    """Sign up + log in a non-admin user, return the Authorization header."""
+    await client.post(
+        "/auth/signup",
+        json={"email": "regular@example.com", "password": "regularpass123"},
+    )
+    resp = await client.post(
+        "/auth/login",
+        data={"username": "regular@example.com", "password": "regularpass123"},
+    )
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+

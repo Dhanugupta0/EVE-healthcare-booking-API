@@ -33,8 +33,10 @@ async def create_booking(
     return booking
 
 
-async def get_user_bookings(db: AsyncSession, user_id: int) -> list[Booking]:
-    result = await db.execute(select(Booking).where(Booking.user_id == user_id))
+async def get_user_bookings(db: AsyncSession, user_id: int, skip: int = 0, limit: int = 20) -> list[Booking]:
+    result = await db.execute(
+        select(Booking).where(Booking.user_id == user_id).offset(skip).limit(limit)
+    )
     return list(result.scalars().all())
 
 

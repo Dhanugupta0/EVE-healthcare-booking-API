@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
@@ -20,9 +21,13 @@ async def signup(payload: UserCreate, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
         )
 
+    # Auto-assign admin if email matches ADMIN_EMAIL env var
+    is_admin = bool(settings.ADMIN_EMAIL and payload.email == settings.ADMIN_EMAIL)
+
     user = User(
         email=payload.email,
         hashed_password=hash_password(payload.password),
+        is_admin=is_admin,
     )
     db.add(user)
     await db.commit()

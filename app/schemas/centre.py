@@ -1,14 +1,14 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CentreCreate(BaseModel):
-    name: str
-    location: str
+    name: str = Field(min_length=1)
+    location: str = Field(min_length=1)
 
 
 class TestCreate(BaseModel):
-    name: str
-    price: float
+    name: str = Field(min_length=1)
+    price: float = Field(gt=0)
 
 
 class TestResponse(BaseModel):

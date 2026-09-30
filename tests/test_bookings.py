@@ -27,7 +27,7 @@ async def test_create_booking(client: AsyncClient, auth_header: dict):
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -38,13 +38,29 @@ async def test_create_booking(client: AsyncClient, auth_header: dict):
 
 
 @pytest.mark.asyncio
+async def test_create_booking_past_date(client: AsyncClient, auth_header: dict):
+    """Booking with a past appointment_time → 422."""
+    centre_id, test_id = await _create_centre_and_test(client, auth_header)
+    resp = await client.post(
+        "/bookings/",
+        json={
+            "test_id": test_id,
+            "centre_id": centre_id,
+            "appointment_time": "2020-01-01T10:00:00Z",
+        },
+        headers=auth_header,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_booking_nonexistent_test(client: AsyncClient, auth_header: dict):
     resp = await client.post(
         "/bookings/",
         json={
             "test_id": 999,
             "centre_id": 999,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -59,7 +75,7 @@ async def test_list_bookings(client: AsyncClient, auth_header: dict):
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -76,7 +92,7 @@ async def test_get_booking(client: AsyncClient, auth_header: dict):
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -95,7 +111,7 @@ async def test_get_other_users_booking(client: AsyncClient, auth_header: dict):
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -104,11 +120,11 @@ async def test_get_other_users_booking(client: AsyncClient, auth_header: dict):
     # Create a second user
     await client.post(
         "/auth/signup",
-        json={"email": "other@example.com", "password": "otherpass"},
+        json={"email": "other@example.com", "password": "otherpass1"},
     )
     resp2 = await client.post(
         "/auth/login",
-        data={"username": "other@example.com", "password": "otherpass"},
+        data={"username": "other@example.com", "password": "otherpass1"},
     )
     other_header = {"Authorization": f"Bearer {resp2.json()['access_token']}"}
 
@@ -124,7 +140,7 @@ async def test_cancel_pending_booking(client: AsyncClient, auth_header: dict):
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -143,7 +159,7 @@ async def test_cancel_already_cancelled_booking(client: AsyncClient, auth_header
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -165,7 +181,7 @@ async def test_cancel_other_users_booking(client: AsyncClient, auth_header: dict
         json={
             "test_id": test_id,
             "centre_id": centre_id,
-            "appointment_time": "2025-06-15T10:00:00Z",
+            "appointment_time": "2099-06-15T10:00:00Z",
         },
         headers=auth_header,
     )
@@ -174,13 +190,43 @@ async def test_cancel_other_users_booking(client: AsyncClient, auth_header: dict
     # Second user
     await client.post(
         "/auth/signup",
-        json={"email": "other2@example.com", "password": "otherpass"},
+        json={"email": "other2@example.com", "password": "otherpass2"},
     )
     resp2 = await client.post(
         "/auth/login",
-        data={"username": "other2@example.com", "password": "otherpass"},
+        data={"username": "other2@example.com", "password": "otherpass2"},
     )
     other_header = {"Authorization": f"Bearer {resp2.json()['access_token']}"}
 
     resp = await client.post(f"/bookings/{booking_id}/cancel", headers=other_header)
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_bookings_pagination(client: AsyncClient, auth_header: dict):
+    """Pagination params skip and limit work correctly."""
+    centre_id, test_id = await _create_centre_and_test(client, auth_header)
+
+    # Create 3 bookings
+    for i in range(3):
+        await client.post(
+            "/bookings/",
+            json={
+                "test_id": test_id,
+                "centre_id": centre_id,
+                "appointment_time": f"2099-07-{10 + i}T10:00:00Z",
+            },
+            headers=auth_header,
+        )
+
+    # Default returns all 3
+    resp = await client.get("/bookings/", headers=auth_header)
+    assert len(resp.json()) == 3
+
+    # limit=2 returns 2
+    resp = await client.get("/bookings/?limit=2", headers=auth_header)
+    assert len(resp.json()) == 2
+
+    # skip=2 returns 1
+    resp = await client.get("/bookings/?skip=2", headers=auth_header)
+    assert len(resp.json()) == 1
