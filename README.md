@@ -1,237 +1,267 @@
-# EVE Diagnostics Booking API
+# EVE Healthcare — Diagnostic Booking & Simulated Payment API
 
-A FastAPI backend for diagnostic test bookings with a simulated payment flow. Built as a hiring assignment demonstrating clean async architecture, proper testing, and Docker deployment.
-
-## Tech Stack
-
-- **Python 3.11+** / **FastAPI** — fully async (`async def` routes throughout)
-- **PostgreSQL** via **SQLAlchemy 2.0 async** (`AsyncSession`, `create_async_engine`) with `asyncpg`
-- **SQLite in-memory** via `aiosqlite` for tests (no external services required)
-- **passlib[bcrypt]** for password hashing, **python-jose** for JWT
-- **pytest** + **pytest-asyncio** + **httpx.AsyncClient** for async testing
-- **Docker** + **docker-compose** for one-command startup
+> **SDE Intern Backend Engineering Assignment**  
+> A clean, production-ready asynchronous backend service for diagnostic test bookings with a simulated payment flow and idempotent webhook handling.
 
 ---
 
-## How to Run
+## 📌 Project Overview
 
-### Option 1: Docker Compose (recommended)
+This service manages the complete lifecycle of diagnostic healthcare bookings:
+1. **User Authentication**: Secure signup and login with password hashing and JWT access tokens.
+2. **Diagnostic Centres & Tests**: Catalog APIs for centres and test packages with price and location.
+3. **Booking System**: Appointment booking with validation, status tracking (`PENDING`, `CONFIRMED`, `CANCELLED`, `FAILED`), and user data isolation.
+4. **Simulated Payments & Webhook**: Mock payment simulation and an idempotent webhook callback that prevents duplicate processing and state corruption.
+
+---
+
+## 🛠️ Tech Stack
+
+| Component | Technology | Description |
+|---|---|---|
+| **Framework** | **FastAPI** (Python 3.11+) | Asynchronous web framework with native OpenAPI docs |
+| **Database** | **PostgreSQL** & **SQLite** | Asynchronous ORM via **SQLAlchemy 2.0** (`asyncpg` / `aiosqlite`) |
+| **Validation** | **Pydantic v2** | Strict schema validation for requests and responses |
+| **Security** | **JWT & Bcrypt** | `python-jose` for token generation and `passlib` for password hashing |
+| **Testing** | **Pytest & HTTPX** | Async test suite with in-memory database and E2E verification |
+| **Container** | **Docker & Docker Compose** | Multi-container setup for one-command execution |
+
+---
+
+## 🏛️ System Architecture (High-Level Design)
+
+The system is designed with a layered architecture separating concerns across API routing, business services, and database persistence:
+
+<img src="img/hld_architecture.png" alt="High-Level System Architecture" width="100%" />
+
+- **Client Layer**: Patients, Administrators, and external Payment Providers.
+- **API Gateway & Security**: Request validation, JWT authentication, and role authorization.
+- **Service Layer**: Decoupled business logic (`AuthService`, `CentreService`, `BookingService`, `PaymentService`).
+- **Persistence Layer**: Async PostgreSQL / SQLite database with unified models and relational constraints.
+
+---
+
+## 📖 Interactive Swagger API Documentation
+
+FastAPI automatically generates interactive OpenAPI documentation accessible via your browser:
+
+<img src="img/swagger_docs.png" alt="Interactive Swagger Documentation" width="100%" />
+
+*Open Swagger at: `http://localhost:8001/docs`*
+
+---
+
+## 🚀 How to Run Locally
+
+### Option 1: Instant Local Run (Recommended — No Postgres/Docker Required)
+
+A pre-configured [`.env`](file://.env) file is provided pointing to the local SQLite database (`dev.db`):
 
 ```bash
-git clone <repo-url> && cd eve-diagnostics-booking
-docker-compose up --build
-```
-
-The API will be available at `http://localhost:8000`. Swagger docs at `http://localhost:8000/docs`.
-
-### Option 2: Local venv + uvicorn
-
-```bash
-# Create and activate virtual environment
-python3 -m venv venv
+# 1. Activate virtual environment
 source venv/bin/activate
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Set environment variables (or create .env from .env.example)
-cp .env.example .env
-# Edit .env to point DATABASE_URL to your local Postgres
-
-# Run the server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# 2. Run the application (using port 8001 to avoid conflicts)
+uvicorn app.main:app --reload --port 8001
 ```
 
-### Running Tests
+Access the interactive API docs at **`http://localhost:8001/docs`**.
+
+---
+
+### Option 2: Run with Docker Compose (PostgreSQL)
 
 ```bash
+docker compose up --build
+```
+
+The database container starts first, runs health checks, and the API initializes automatically.
+
+---
+
+## 🧪 How to Run Tests
+
+The test suite runs entirely in-memory using `aiosqlite` without requiring external services.
+
+```bash
+# Run the full async test suite (44 passing tests)
 source venv/bin/activate
 pytest -v
+
+# Run the live End-to-End lifecycle runner
+python run_e2e.py
 ```
 
-Tests use an in-memory SQLite database — no Postgres needed.
+### Test Results
+
+<p align="center">
+  <img src="img/test_suite.png" width="49%" alt="Pytest Test Suite (44 passed)" />
+  <img src="img/e2e_runner.png" width="49%" alt="End-to-End Live Runner (10/10 stages)" />
+</p>
+
+- **Pytest Suite (`pytest -v`)**: 44 passing unit, integration, and security tests.
+- **Live E2E Runner (`python run_e2e.py`)**: 10-stage sequential simulation of real user, admin, booking, webhook, and failure recovery flows.
 
 ---
 
-## API Endpoints
+## 📡 API Endpoints & Examples (As Per Assignment)
 
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/auth/signup` | none | Create user (admin if email matches `ADMIN_EMAIL`) |
-| POST | `/auth/login` | none | Returns JWT access token |
-| GET | `/centres/` | none | List centres (paginated: `skip`, `limit`) |
-| GET | `/centres/{centre_id}` | none | Centre detail + its tests |
-| POST | `/centres/` | admin | Create a centre |
-| POST | `/centres/{centre_id}/tests` | admin | Add a test to a centre |
-| POST | `/bookings/` | required | Create a booking (PENDING, amount = test price) |
-| GET | `/bookings/` | required | List current user's bookings (paginated: `skip`, `limit`) |
-| GET | `/bookings/{id}` | required | Get one booking (must belong to caller) |
-| POST | `/bookings/{id}/cancel` | required | Cancel a PENDING or CONFIRMED booking |
-| POST | `/payments/` | required | Simulate payment → SUCCESS/FAILED |
-| POST | `/payments/webhook/` | none | Idempotent status update from "payment provider" |
+### 1. Authentication
+- `POST /auth/signup` — Create user account (`is_admin=True` if email matches `ADMIN_EMAIL`)
+- `POST /auth/login` — Authenticate and receive JWT bearer token
 
-### Example curl Requests
-
-**Signup:**
 ```bash
-curl -X POST http://localhost:8000/auth/signup \
+# Sign up
+curl -X POST http://localhost:8001/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "securepass123"}'
+  -d '{"email": "patient@example.com", "password": "securepassword123"}'
+
+# Log in
+curl -X POST http://localhost:8001/auth/login \
+  -d "username=patient@example.com&password=securepassword123"
 ```
 
-**Login:**
-```bash
-curl -X POST http://localhost:8000/auth/login \
-  -d "username=user@example.com&password=securepass123"
-```
+---
 
-**List Centres (with pagination):**
-```bash
-curl "http://localhost:8000/centres/?skip=0&limit=20"
-```
+### 2. Diagnostic Centres & Tests
+- `GET /centres/` — List diagnostic centres (paginated: `skip`, `limit`)
+- `GET /centres/{centre_id}` — Get centre detail with available diagnostic tests
+- `POST /centres/` — Create diagnostic centre (*Admin only*)
+- `POST /centres/{centre_id}/tests` — Add test with price to centre (*Admin only*)
 
-**Get Centre Detail:**
 ```bash
-curl http://localhost:8000/centres/1
-```
+# Browse centres
+curl http://localhost:8001/centres/
 
-**Create Centre (admin auth required):**
-```bash
-curl -X POST http://localhost:8000/centres/ \
-  -H "Authorization: Bearer <token>" \
+# View centre detail with tests
+curl http://localhost:8001/centres/1
+
+# Create centre (Admin token required)
+curl -X POST http://localhost:8001/centres/ \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
   -H "Content-Type: application/json" \
-  -d '{"name": "City Diagnostics", "location": "Mumbai"}'
-```
+  -d '{"name": "Apollo Diagnostics", "location": "Bangalore"}'
 
-**Add Test to Centre (admin auth required):**
-```bash
-curl -X POST http://localhost:8000/centres/1/tests \
-  -H "Authorization: Bearer <token>" \
+# Add test to centre (Admin token required)
+curl -X POST http://localhost:8001/centres/1/tests \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
   -H "Content-Type: application/json" \
-  -d '{"name": "Complete Blood Count", "price": 500.00}'
+  -d '{"name": "Complete Blood Count (CBC)", "price": 499.00}'
 ```
 
-**Create Booking (auth required):**
+---
+
+### 3. Booking System
+- `POST /bookings/` — Book a test (status defaults to `PENDING`, amount pulled from test price)
+- `GET /bookings/` — List current user's bookings (user data isolation enforced)
+- `GET /bookings/{booking_id}` — View single booking details
+- `POST /bookings/{booking_id}/cancel` — Cancel a pending or confirmed booking
+
 ```bash
-curl -X POST http://localhost:8000/bookings/ \
-  -H "Authorization: Bearer <token>" \
+# Create booking (Appointment must be in future)
+curl -X POST http://localhost:8001/bookings/ \
+  -H "Authorization: Bearer <PATIENT_TOKEN>" \
   -H "Content-Type: application/json" \
-  -d '{"test_id": 1, "centre_id": 1, "appointment_time": "2025-06-15T10:00:00Z"}'
+  -d '{"centre_id": 1, "test_id": 1, "appointment_time": "2099-10-15T09:30:00Z"}'
+
+# List user bookings
+curl http://localhost:8001/bookings/ \
+  -H "Authorization: Bearer <PATIENT_TOKEN>"
+
+# Cancel booking
+curl -X POST http://localhost:8001/bookings/1/cancel \
+  -H "Authorization: Bearer <PATIENT_TOKEN>"
 ```
 
-**List My Bookings (with pagination):**
-```bash
-curl "http://localhost:8000/bookings/?skip=0&limit=20" \
-  -H "Authorization: Bearer <token>"
-```
+---
 
-**Get Booking (auth required):**
-```bash
-curl http://localhost:8000/bookings/1 \
-  -H "Authorization: Bearer <token>"
-```
+### 4. Simulated Payments & Webhook
+- `POST /payments/` — Simulate payment processing (results in `SUCCESS` or `FAILED`)
+- `POST /payments/webhook/` — Idempotent webhook callback from simulated payment provider
 
-**Cancel Booking (auth required):**
 ```bash
-curl -X POST http://localhost:8000/bookings/1/cancel \
-  -H "Authorization: Bearer <token>"
-```
-
-**Simulate Payment (auth required):**
-```bash
-curl -X POST http://localhost:8000/payments/ \
-  -H "Authorization: Bearer <token>" \
+# Simulate payment
+curl -X POST http://localhost:8001/payments/ \
+  -H "Authorization: Bearer <PATIENT_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"booking_id": 1}'
-```
 
-**Payment Webhook (no auth — simulates external provider):**
-```bash
-curl -X POST http://localhost:8000/payments/webhook/ \
+# Webhook callback (Idempotent by event_id)
+curl -X POST http://localhost:8001/payments/webhook/ \
   -H "Content-Type: application/json" \
-  -d '{"event_id": "evt-abc-123", "booking_id": 1, "status": "SUCCESS"}'
+  -d '{"event_id": "evt-payment-101", "booking_id": 1, "status": "SUCCESS"}'
 ```
 
 ---
 
-## Schema Explanation
+## 🛡️ Edge Cases Handled
 
-### Why These Tables
-
-The data model follows the natural domain: **Users** book **Tests** at **Centres**, creating **Bookings** that are paid for via **Payments**.
-
-### Tables
-
-| Table | Purpose |
-|-------|------------|
-| `users` | Authentication. Email is unique and indexed for fast lookup. `is_admin` flag controls access to management endpoints. |
-| `centres` | Diagnostic centres with name and location. |
-| `tests` | Diagnostic tests offered at a centre. FK to `centres`. Price stored here — booking amount is pulled from this, not from client input. |
-| `bookings` | A user's appointment for a test at a centre. Tracks status through its lifecycle. |
-| `payments` | Payment records. `event_id` is a unique idempotency key to prevent duplicate processing from webhook retries. |
-
-### Why Status is a String Column (Not a Postgres ENUM)
-
-Both `BookingStatus` (PENDING, CONFIRMED, FAILED, CANCELLED) and `PaymentStatus` (SUCCESS, FAILED) are stored as plain `String` columns rather than Postgres-native `ENUM` types. This ensures the same SQLAlchemy models work against both PostgreSQL in production and SQLite in-memory during tests — SQLite has no native ENUM type. The Python-side `enum.Enum` classes still enforce valid values in application code.
-
-### Why `event_id` is the Idempotency Key
-
-Payment providers often retry webhook calls. The `event_id` column has a unique constraint. Before inserting a new Payment, the webhook handler checks if that `event_id` already exists — if so, it returns the existing result without touching the booking. This guarantees exactly-once semantics for payment processing.
+| Edge Case | Implementation & Behavior |
+|---|---|
+| **Webhook Idempotency** | Webhooks are keyed by `event_id`. Duplicate webhook deliveries return the existing payment record (`200 OK`) without double-updating booking status or corrupting data. |
+| **No-Revival Guard** | If a booking is `CANCELLED`, a late `SUCCESS` webhook creates the payment entry for audit records, but **never revives** the booking back to `CONFIRMED`. |
+| **Double Payment Prevention** | Calling `/payments/` on an already `CONFIRMED` booking is blocked with `400 Bad Request`. |
+| **Payment Failure & Retry** | A `FAILED` booking can be retried via the payment endpoint; once a successful payment arrives, status transitions to `CONFIRMED`. |
+| **User Data Isolation** | Patients can only view and cancel their own bookings. Accessing another user's booking ID returns `404 Not Found`. |
+| **Input Validation** | Booking appointments in the past returns `422`. Passwords under 8 characters, empty centre names, and non-positive prices (`<= 0`) are rejected at schema level. |
+| **Admin Authorization** | Regular users attempting to create centres or add tests receive `403 Forbidden`. |
 
 ---
 
-## Business Rules & Edge Cases
+## 🗄️ Database Schema Design
 
-### Input Validation (Pydantic)
-- **Password**: minimum 8 characters (422 if shorter)
-- **Centre name / test name**: cannot be empty (422 if blank)
-- **Test price**: must be greater than 0 (422 if zero or negative)
-- **Appointment time**: must be in the future (422 if in the past)
+```text
+users
+├── id (PK, Integer)
+├── email (String, Unique, Indexed)
+├── hashed_password (String)
+├── is_admin (Boolean, Default: False)
+└── created_at (DateTime, UTC)
 
-### Admin Access Control
-- `is_admin` boolean on the User model (default `False`)
-- Set `ADMIN_EMAIL` env var — any user signing up with that email is automatically marked as admin
-- Only admins can create diagnostic centres (`POST /centres/`) and add tests (`POST /centres/{id}/tests`) — non-admins get 403
+centres
+├── id (PK, Integer)
+├── name (String, min_length=1)
+├── location (String)
+└── created_at (DateTime, UTC)
 
-### Webhook Cannot Revive Cancelled Bookings
-- If a booking has been cancelled by the user, a late-arriving webhook (SUCCESS or FAILED) will **not** change the booking status back
-- The payment record is still stored for audit trail, and idempotency still works correctly
+tests
+├── id (PK, Integer)
+├── centre_id (FK -> centres.id)
+├── name (String, min_length=1)
+├── price (Float, gt=0)
+└── created_at (DateTime, UTC)
 
-### Payment Retry After Failure
-- Payment is allowed for bookings in `PENDING` or `FAILED` status
-- Payment is blocked for `CONFIRMED` (already paid) and `CANCELLED` (user cancelled) bookings
-- Each retry generates a new `event_id`
+bookings
+├── id (PK, Integer)
+├── user_id (FK -> users.id)
+├── centre_id (FK -> centres.id)
+├── test_id (FK -> tests.id)
+├── appointment_time (DateTime, UTC)
+├── amount (Float, Snapshotted from test.price)
+├── status (String: PENDING | CONFIRMED | CANCELLED | FAILED)
+└── created_at (DateTime, UTC)
 
-### Pagination
-- `GET /centres/` and `GET /bookings/` accept `skip` (default 0) and `limit` (default 20, max 100) query params
-- Example: `GET /bookings/?skip=0&limit=10`
-
-### Other Edge Cases
-- Ownership check returns 404, not 403 — avoids leaking information about whether a booking exists
-- Booking amount is pulled from the test's price in the database, not from client input
-- Cancelling an already cancelled or failed booking returns 400
+payments
+├── id (PK, Integer)
+├── booking_id (FK -> bookings.id)
+├── event_id (String, Unique, Indexed)
+├── status (String: SUCCESS | FAILED)
+└── created_at (DateTime, UTC)
+```
 
 ---
 
-## Assumptions
+## 💡 Important Assumptions
 
-1. **Admin via env var** — `ADMIN_EMAIL` marks a single user as admin on signup. In production, this would be a proper RBAC system with an admin panel.
-2. **Ownership check returns 404, not 403** — when a user tries to access another user's booking, the API returns 404 to avoid leaking information about whether the booking exists.
-3. **Payment success rate is simulated** — the `POST /payments/` endpoint randomly resolves to SUCCESS (80%) or FAILED (20%). In production, this would integrate with a real payment gateway.
-4. **No Alembic migrations** — tables are created via `Base.metadata.create_all` on startup. Fine for a demo; production would use Alembic.
-5. **Webhook has no authentication** — in production, webhook endpoints would verify a signature from the payment provider.
-6. **Single commit for webhook** — the Payment row and Booking status update happen in a single `await db.commit()` call, ensuring atomicity.
+1. **Price Integrity**: Booking amount is determined by the server snapshotting `test.price` at creation time, preventing client-side price tampering.
+2. **Admin Configuration**: The initial system administrator is determined by matching the registered email against the `ADMIN_EMAIL` environment variable.
+3. **Audit Trail**: Payments received for cancelled bookings are preserved in the `payments` table for financial accounting and dispute resolution.
 
 ---
 
-## What I Would Improve With More Time
+## 🔮 What I Would Improve With More Time
 
-- **Alembic migrations** — proper schema versioning instead of `create_all` on startup
-- **Redis caching** — cache frequently accessed data like the centres list to reduce DB load
-- **Rate limiting on login** — protect `/auth/login` from brute force attacks (e.g., via Redis + slowapi)
-- **Structured logging** — add middleware for request/response logging with correlation IDs, latency tracking
-- **Webhook signature verification** — validate that webhook calls come from the actual payment provider using HMAC signatures
-- **Full RBAC** — role-based access control beyond a single admin flag
-- **Retry queue** — for failed payments, allow retrying with exponential backoff via Celery
-- **CI/CD pipeline** — automated test runs, linting, and deployment
-- **Soft deletes** — instead of hard state transitions, maintain an audit trail
+1. **Alembic Database Migrations**: Add formal schema migration version control instead of `create_all`.
+2. **Redis Caching**: Cache diagnostic centres and test catalogs (`GET /centres/`) with cache invalidation on admin updates.
+3. **Webhook Signature Verification**: Add HMAC-SHA256 signature verification to ensure webhooks genuinely originate from the payment provider.
+4. **Rate Limiting**: Protect authentication and payment simulation endpoints against brute force using Redis token buckets.
